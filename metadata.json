@@ -1,0 +1,6 @@
+{
+  "name": "Warehouse Logistics Monitor",
+  "description": "Professional PWA logistics monitoring dashboard with CSV/Excel import validation, custom analytics, and smart WhatsApp report generation with courier performance breakdowns.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
