@@ -212,6 +212,10 @@ function resetFilters() {
                 <StatusBadge :status="item[col.key]" />
               </template>
               
+              <template v-else-if="col.type === 'action'">
+                <slot :name="'col-' + col.key" :item="item"></slot>
+              </template>
+              
               <template v-else-if="col.key === 'urgency' || col.key === 'urgensitas'">
                 <span 
                   class="font-semibold"

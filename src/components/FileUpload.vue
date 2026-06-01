@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { UploadCloud, FileSpreadsheet, Download, RefreshCw, AlertCircle } from 'lucide-vue-next';
+import * as XLSX from 'xlsx';
 import { MenuKey } from '../types';
 import { generateCSVSample } from '../utils/csvParser';
 
@@ -57,26 +58,49 @@ function processFile(file: File) {
   uploadError.value = null;
   const suffix = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
 
-  // Validate suffix
-  if (suffix !== '.csv' && suffix !== '.txt') {
-    uploadError.value = 'Hanya menerima file format .CSV atau berkas plain .TXT saja.';
+  // Validate suffix (allow both CSV and Excel)
+  if (suffix !== '.csv' && suffix !== '.txt' && suffix !== '.xlsx' && suffix !== '.xls') {
+    uploadError.value = 'Hanya menerima file format CSV (.csv, .txt) atau Excel (.xlsx, .xls) saja.';
     return;
   }
 
   processing.value = true;
   activeFileName.value = file.name;
 
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const text = e.target?.result as string;
-    emit('file-parsed', { text, fileName: file.name });
-    processing.value = false;
-  };
-  reader.onerror = () => {
-    uploadError.value = 'Gagal membaca isi konten file.';
-    processing.value = false;
-  };
-  reader.readAsText(file);
+  if (suffix === '.xlsx' || suffix === '.xls') {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const csvText = XLSX.utils.sheet_to_csv(worksheet);
+        emit('file-parsed', { text: csvText, fileName: file.name });
+      } catch (err: any) {
+        uploadError.value = 'Gagal memproses berkas Excel: ' + err.message;
+      } finally {
+        processing.value = false;
+      }
+    };
+    reader.onerror = () => {
+      uploadError.value = 'Gagal membaca isi konten file Excel.';
+      processing.value = false;
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      emit('file-parsed', { text, fileName: file.name });
+      processing.value = false;
+    };
+    reader.onerror = () => {
+      uploadError.value = 'Gagal membaca isi konten file.';
+      processing.value = false;
+    };
+    reader.readAsText(file);
+  }
 }
 
 function triggerDownloadTemplate() {
@@ -98,7 +122,7 @@ function triggerDownloadTemplate() {
       <div>
         <h3 class="font-semibold text-slate-800 flex items-center gap-1.5 leading-none">
           <FileSpreadsheet class="w-4 h-4 text-emerald-600" />
-          Metode Sinkronisasi Upload CSV
+          Metode Sinkronisasi Upload CSV & Excel
         </h3>
         <p class="text-xs text-slate-500 mt-1">Unggah daftar terbaru untuk memantau status operasional secara berkala.</p>
       </div>
@@ -143,7 +167,7 @@ function triggerDownloadTemplate() {
         ref="fileInput"
         type="file" 
         class="hidden" 
-        accept=".csv,.txt"
+        accept=".csv,.txt,.xlsx,.xls"
         @change="handleFileSelect"
       />
 
@@ -160,8 +184,8 @@ function triggerDownloadTemplate() {
       </div>
       
       <div v-else class="space-y-1">
-        <p class="text-sm font-semibold text-slate-700"> Drag & drop berkas CSV atau <span class="text-blue-600 hover:underline">pilih file explorer</span></p>
-        <p class="text-xs text-slate-500">Menerima .CSV dengan separator koma (,) atau titik-koma (;)</p>
+        <p class="text-sm font-semibold text-slate-700"> Drag & drop berkas CSV / Excel atau <span class="text-blue-600 hover:underline">pilih file explorer</span></p>
+        <p class="text-xs text-slate-500">Menerima format CSV (.csv, .txt) atau Excel (.xlsx, .xls)</p>
       </div>
     </div>
 

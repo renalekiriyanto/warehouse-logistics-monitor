@@ -33,7 +33,7 @@ const navItems = [
   { path: '/menu/projection', label: '2. Projection', icon: CalendarDays, key: 'projection' },
   { path: '/menu/expedite', label: '3. Expedite Parcel', icon: Timer, key: 'expedite' },
   { path: '/menu/backlog', label: '4. Backlog', icon: AlertTriangle, key: 'backlog' },
-  { path: '/menu/std', label: '5. STD Deliveries', icon: History, key: 'std' },
+  { path: '/menu/std', label: '5. STD/Sameday Delivered', icon: History, key: 'std' },
   { path: '/menu/performance', label: '6. Performa Kurir', icon: Truck, key: 'performance' },
   { path: '/menu/attendance', label: '7. Absensi Kurir', icon: Users, key: 'attendance' },
 ];

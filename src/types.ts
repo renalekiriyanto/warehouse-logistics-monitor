@@ -32,6 +32,10 @@ export interface InboundData {
   weight: number;
   courier: string;
   status: 'pending' | 'completed' | 'delayed';
+  type_slot?: string;
+  date_inbound?: string;
+  actual_arrival?: string;
+  total_order?: number;
 }
 
 export interface ProjectionData {

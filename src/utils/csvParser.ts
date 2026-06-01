@@ -2,13 +2,10 @@ import { ColumnSchema, ValidationError, MenuKey } from '../types';
 
 export const MENU_SCHEMAS: Record<MenuKey, ColumnSchema[]> = {
   inbound: [
-    { key: 'resi', label: 'No Resi', type: 'string', required: true, unique: true },
-    { key: 'sender', label: 'Pengirim', type: 'string', required: true },
-    { key: 'receiver', label: 'Penerima', type: 'string', required: true },
-    { key: 'destination', label: 'Kota Tujuan', type: 'string', required: true },
-    { key: 'weight', label: 'Berat (Kg)', type: 'number', required: true },
-    { key: 'courier', label: 'Kurir', type: 'string', required: true },
-    { key: 'status', label: 'Status', type: 'status', required: true },
+    { key: 'date_inbound', label: 'Tanggal Inbound', type: 'date', required: true },
+    { key: 'type_slot', label: 'Tipe Slot', type: 'string', required: true },
+    { key: 'actual_arrival', label: 'Kedatangan Aktual', type: 'time', required: true },
+    { key: 'total_order', label: 'Total Order', type: 'number', required: true },
   ],
   projection: [
     { key: 'date', label: 'Tanggal Proyeksi', type: 'date', required: true },
@@ -68,8 +65,8 @@ export function generateCSVSample(menu: MenuKey): string {
 
   switch (menu) {
     case 'inbound':
-      sampleRow1 = '"RESI918239","PT Angin Ribut","Budi Santoso","Jakarta",4.5,"Andi","pending"';
-      sampleRow2 = '"RESI821923","Lazada Co","Dewi Sartika","Surabaya",12.1,"Budi","completed"';
+      sampleRow1 = '"2026-05-31","1","08:30",12';
+      sampleRow2 = '"2026-05-31","2","13:15",25';
       break;
     case 'projection':
       sampleRow1 = '"2026-05-30",1500,"Alat Rumah Tangga","Bandung Warehouse","Heri Kurniawan","pending"';
@@ -237,14 +234,22 @@ export function parseCSV(text: string, menu: MenuKey): { items: any[]; errors: V
           hasRowError = true;
         }
       } else if (schema.type === 'time') {
-        if (!/^\d{2}:\d{2}$/.test(rawVal)) {
+        const trimmedVal = rawVal.trim();
+        if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmedVal)) {
           errors.push({
             row: docRowNumber,
             column: schema.label,
-            message: `Format waktu '${rawVal}' salah (gunakan HH:MM dalam format 24 jam).`,
+            message: `Format waktu '${rawVal}' salah (gunakan HH:MM atau HH:MM:SS dalam format 24 jam).`,
             value: rawVal,
           });
           hasRowError = true;
+        } else {
+          // Pad hours if single digit, e.g. 8:30 -> 08:30
+          let [h, m, s] = trimmedVal.split(':');
+          const hh = h.padStart(2, '0');
+          const mm = m.padStart(2, '0');
+          const ss = s ? s.padStart(2, '0') : '00';
+          parsedVal = `${hh}:${mm}:${ss}`;
         }
       } else if (schema.type === 'status') {
         parsedVal = rawVal.toLowerCase().trim();
