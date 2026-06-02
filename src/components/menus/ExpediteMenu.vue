@@ -6,7 +6,8 @@ import { parseCSV } from '../../utils/csvParser';
 import FileUpload from '../../components/FileUpload.vue';
 import DataPreviewTable from '../../components/DataPreviewTable.vue';
 import ValidationResult from '../../components/ValidationResult.vue';
-import { TableProperties, Server, RefreshCw, CheckCircle2, AlertCircle, CalendarDays, Bell, X, AlertTriangle } from 'lucide-vue-next';
+import { TableProperties, Server, RefreshCw, CheckCircle2, AlertCircle, CalendarDays, Bell, X, AlertTriangle, Download, Image, SlidersHorizontal } from 'lucide-vue-next';
+import html2canvas from 'html2canvas';
 
 const store = useLogisticsStore();
 
@@ -123,7 +124,8 @@ const courierStats = computed(() => {
     delivered,
     onhold,
     successRate,
-    doneDelivering
+    doneDelivering,
+    parcels: courierExpedites
   };
 });
 
@@ -202,6 +204,87 @@ const columns = [
   { key: 'status', label: 'Status', type: 'status' },
   { key: 'action', label: 'Pengingat', type: 'action' }
 ];
+
+// Filtering % (Onhold + Delivered) and Image Export states
+const minOnholdDeliveredFilter = ref<number>(0);
+const html2canvasElementRef = ref<HTMLElement | null>(null);
+const isExportingImage = ref(false);
+
+async function exportReportAsImage() {
+  if (!html2canvasElementRef.value) {
+    showNotification('Terjadi kesalahan: Konten laporan tidak ditemukan.', 'error');
+    return;
+  }
+  
+  isExportingImage.value = true;
+  showNotification('Sedang membuat berkas gambar rekapitulasi...', 'info');
+  
+  try {
+    const canvas = await html2canvas(html2canvasElementRef.value, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+    });
+    
+    const imageUrl = canvas.toDataURL('image/png');
+    const downloadLink = document.createElement('a');
+    downloadLink.href = imageUrl;
+    downloadLink.download = `Report_Expedite_To_Date_${new Date().toISOString().slice(0, 10)}.png`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    
+    showNotification('Laporan berhasil diekspor sebagai gambar PNG!', 'success');
+  } catch (err: any) {
+    console.error('Failed to export image:', err);
+    showNotification('Gagal membuat gambar: ' + err.message, 'error');
+  } finally {
+    isExportingImage.value = false;
+  }
+}
+
+const expediteToDateReport = computed(() => {
+  const couriersSet = new Set<string>();
+  store.expedite.forEach(x => {
+    if (x.courier) couriersSet.add(x.courier.trim());
+  });
+  
+  if (couriersSet.size === 0) {
+    store.performance.forEach(p => {
+      if (p.courier) couriersSet.add(p.courier.trim());
+    });
+  }
+  
+  return Array.from(couriersSet).map(name => {
+    const courierExpedites = store.expedite.filter(x => x.courier?.trim() === name);
+    const totalDelivering = courierExpedites.length;
+    const delivered = courierExpedites.filter(x => x.status === 'completed').length;
+    const onhold = courierExpedites.filter(x => x.status === 'delayed' || x.status === 'pending').length;
+    
+    let successRateNumeric = 0;
+    if (totalDelivering > 0) {
+      successRateNumeric = Math.round((delivered / totalDelivering) * 100);
+    }
+    
+    let onholdDeliveredPercent = 0;
+    if (totalDelivering > 0) {
+      onholdDeliveredPercent = Math.round(((onhold + delivered) / totalDelivering) * 100);
+    }
+    
+    return {
+      courier: name,
+      totalDelivering,
+      onhold,
+      delivered,
+      successRate: `${successRateNumeric}%`,
+      onholdDeliveredPercent: `${onholdDeliveredPercent}%`,
+      onholdDeliveredPercentNumeric: onholdDeliveredPercent
+    };
+  }).filter(row => {
+    return row.onholdDeliveredPercentNumeric >= minOnholdDeliveredFilter.value;
+  });
+});
 
 onMounted(() => {
   fetchExpeditesApi();
@@ -331,6 +414,106 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- Report Expedite To Date Section -->
+    <div ref="html2canvasElementRef" class="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-3">
+        <div class="flex items-center gap-2">
+          <TableProperties class="w-4 h-4 text-emerald-600" />
+          <h3 class="text-xs font-bold text-slate-800 uppercase tracking-wider">Report Expedite To Date</h3>
+        </div>
+        
+        <div class="flex items-center gap-2.5 flex-wrap" data-html2canvas-ignore="true">
+          <!-- Filter range slider based on % (Onhold + Delivered) -->
+          <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-slate-600 h-9">
+            <SlidersHorizontal class="w-3.5 h-3.5 text-blue-600" />
+            <span>% (Onhold+Delivered) >=</span>
+            <input 
+              v-model.number="minOnholdDeliveredFilter"
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              class="w-20 accent-blue-600 h-1 cursor-pointer bg-slate-200 rounded-lg appearance-none"
+            />
+            <span class="font-mono bg-blue-50 text-blue-700 font-bold px-1.5 py-0.5 rounded text-[10px] min-w-[32px] text-center">
+              {{ minOnholdDeliveredFilter }}%
+            </span>
+            <button 
+              v-if="minOnholdDeliveredFilter > 0"
+              type="button" 
+              class="text-rose-500 hover:text-rose-700 font-bold ml-1 text-[10px] hover:underline cursor-pointer"
+              @click="minOnholdDeliveredFilter = 0"
+            >
+              Reset
+            </button>
+          </div>
+
+          <!-- Button Export Image -->
+          <button 
+            type="button"
+            class="flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition-all rounded-lg shadow-2xs cursor-pointer select-none disabled:opacity-55 h-9"
+            :disabled="isExportingImage"
+            @click="exportReportAsImage"
+          >
+            <Loader2 v-if="isExportingImage" class="w-3.5 h-3.5 animate-spin" />
+            <Image v-else class="w-3.5 h-3.5" />
+            <span>{{ isExportingImage ? 'Mengekspor...' : 'Export Gambar' }}</span>
+          </button>
+
+          <span class="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded border border-emerald-100 uppercase tracking-wider">
+            Rekapitulasi Kinerja
+          </span>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-450 uppercase tracking-wider">
+              <th class="py-3 px-4 font-bold">Courier Name</th>
+              <th class="py-3 px-4 font-bold text-center">Total Delivering</th>
+              <th class="py-3 px-4 font-bold text-center">On Hold</th>
+              <th class="py-3 px-4 font-bold text-center">Delivered</th>
+              <th class="py-3 px-4 font-bold text-center">Success Rate</th>
+              <th class="py-3 px-4 font-bold text-center">% (Onhold + Delivered)</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr v-for="row in expediteToDateReport" :key="row.courier" class="hover:bg-slate-50/50 transition">
+              <td class="py-3.5 px-4 font-bold text-slate-800 flex items-center gap-2">
+                <div class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                {{ row.courier }}
+              </td>
+              <td class="py-3.5 px-4 text-center font-bold text-slate-700 font-mono">
+                {{ row.totalDelivering }}
+              </td>
+              <td class="py-3.5 px-4 text-center font-bold text-rose-500 font-mono">
+                {{ row.onhold }}
+              </td>
+              <td class="py-3.5 px-4 text-center font-bold text-emerald-600 font-mono">
+                {{ row.delivered }}
+              </td>
+              <td class="py-3.5 px-4 text-center">
+                <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-600 border border-blue-100 font-mono">
+                  {{ row.successRate }}
+                </span>
+              </td>
+              <td class="py-3.5 px-4 text-center">
+                <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-100 font-mono">
+                  {{ row.onholdDeliveredPercent }}
+                </span>
+              </td>
+            </tr>
+            <tr v-if="expediteToDateReport.length === 0">
+              <td colspan="6" class="py-6 text-center text-slate-400 font-medium">
+                Belum ada data atau tidak ada data yang memenuhi saringan persentase.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Database Preview Table -->
     <div class="space-y-3">
       <div class="flex items-center justify-between">
@@ -395,7 +578,7 @@ onMounted(() => {
 
           <div class="grid grid-cols-2 gap-3.5 font-sans">
             <div class="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
-              <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wide block">Expedite Active</span>
+              <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wide block">Delivering</span>
               <span class="text-sm font-extrabold text-slate-900 block mt-0.5">{{ courierStats.totalExpediteDelivering }}</span>
             </div>
             <div class="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
@@ -409,6 +592,41 @@ onMounted(() => {
             <div class="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
               <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wide block">Success Rate</span>
               <span class="text-sm font-extrabold text-blue-600 block mt-0.5">{{ courierStats.successRate }}</span>
+            </div>
+          </div>
+
+          <!-- All Parcels Summarized under Driver -->
+          <div class="border-t border-slate-100 pt-3.5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold text-slate-500 uppercase tracking-wide block">Daftar Paket Expedite Driver</span>
+              <span class="text-[10px] font-bold text-blue-650 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 font-mono">Total: {{ courierStats.totalExpediteDelivering }}</span>
+            </div>
+            
+            <div class="max-h-40 overflow-y-auto space-y-2 pr-1.5 scrollbar-thin">
+              <div 
+                v-for="parcel in courierStats.parcels" 
+                :key="parcel.resi" 
+                class="p-2.5 bg-slate-50 border border-slate-150 rounded-xl hover:bg-slate-100/50 transition duration-150 flex flex-col gap-1"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="font-mono font-black text-rose-600 text-2xs">{{ parcel.resi }}</span>
+                  <span 
+                    class="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider"
+                    :class="{
+                      'bg-emerald-100 text-emerald-800 border border-emerald-200': parcel.status === 'completed',
+                      'bg-amber-100 text-amber-800 border border-amber-200': parcel.status === 'pending',
+                      'bg-rose-100 text-rose-800 border border-rose-250': parcel.status === 'delayed'
+                    }"
+                  >
+                    {{ parcel.status }}
+                  </span>
+                </div>
+                
+                <div class="flex items-center justify-between text-[11px] font-medium text-slate-700">
+                  <span class="truncate pr-2 font-bold">{{ parcel.itemName }}</span>
+                  <span class="text-[9px] text-slate-400 shrink-0 font-bold bg-slate-200/50 px-1.5 py-0.5 rounded">{{ parcel.urgency }}</span>
+                </div>
+              </div>
             </div>
           </div>
 

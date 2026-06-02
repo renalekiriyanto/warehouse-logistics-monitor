@@ -55,14 +55,8 @@ async function fetchProjectionsApi() {
 
     // Map fetched properties safely matching ProjectionData schema
     const mappedData: ProjectionData[] = rawItems.map((item: any) => ({
-      date: item.date || item.tanggal || new Date().toISOString().substring(0, 10),
-      volume: Number(item.volume) || Number(item.total) || 100,
-      category: item.category || item.kategori || 'General Goods',
-      origin: item.origin || item.asal || 'Hub Warehouse',
-      pic: item.pic || item.petugas || 'Admin WMS',
-      status: ['priority', 'prioritas', 'pending'].includes(item.status?.toLowerCase())
-        ? (item.status.toLowerCase() === 'prioritas' ? 'priority' : item.status.toLowerCase()) as 'priority' | 'pending'
-        : 'pending'
+      date_inbound: item.date_inbound || new Date().toISOString().substring(0, 10),
+      projected_inbound: Number(item.projected_inbound) || 0
     }));
 
     // Update logistics store
@@ -211,8 +205,8 @@ function clearDateFilter() {
 }
 
 const columns = [
-  { key: 'date', label: 'Tanggal Proyeksi', type: 'string' },
-  { key: 'volume', label: 'Ekspektasi Volum', type: 'number' }
+  { key: 'date_inbound', label: 'Tanggal Proyeksi', type: 'string' },
+  { key: 'projected_inbound', label: 'Ekspektasi Volum', type: 'number' }
 ];
 
 onMounted(() => {

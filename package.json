@@ -21,7 +21,8 @@
     "pinia": "^3.0.4",
     "vue": "^3.5.35",
     "vue-router": "^4.6.4",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "html2canvas": "^1.4.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

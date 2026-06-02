@@ -13,7 +13,12 @@ import {
   ChevronRight, 
   Sparkles,
   RefreshCw,
-  Award
+  Award,
+  Calendar,
+  TrendingUp,
+  TrendingDown,
+  ArrowUpDown,
+  FileSpreadsheet
 } from 'lucide-vue-next';
 import { useRouter } from 'vue-router';
 
@@ -46,6 +51,134 @@ const todayDateFormatted = computed(() => {
   const options: Intl.DateTimeFormatOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
   return new Date().toLocaleDateString('id-ID', options);
 });
+
+// Comparison states for Inbound vs Projection
+const filterStartDate = ref('2026-05-30');
+const filterEndDate = ref('2026-06-03');
+
+const localInbounds = computed(() => {
+  try {
+    const saved = localStorage.getItem('logistics_inbounds');
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (e) {
+    console.error('Failed to parse local inbounds:', e);
+  }
+  return [
+    { name: 'Slot A - Pagi (08:00 - 12:00)', date_inbound: '2026-05-31', actual_arrival: '08:30', total_order: 12 },
+    { name: 'Slot B - Siang (12:00 - 16:00)', date_inbound: '2026-05-31', actual_arrival: '13:15', total_order: 25 },
+    { name: 'Slot C - Sore (16:00 - 20:00)', date_inbound: '2026-05-31', actual_arrival: '18:45', total_order: 8 }
+  ];
+});
+
+function getDatesInRange(startStr: string, endStr: string): string[] {
+  if (!startStr || !endStr) return [];
+  const startParts = startStr.split('-').map(Number);
+  const endParts = endStr.split('-').map(Number);
+  
+  if (startParts.length !== 3 || endParts.length !== 3) return [];
+  
+  const startDate = new Date(Date.UTC(startParts[0], startParts[1] - 1, startParts[2]));
+  const endDate = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2]));
+  
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return [];
+  
+  const dates: string[] = [];
+  const curr = new Date(startDate);
+  
+  let guard = 0;
+  while (curr <= endDate && guard < 100) {
+    guard++;
+    const yyyy = curr.getUTCFullYear();
+    const mm = String(curr.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(curr.getUTCDate()).padStart(2, '0');
+    dates.push(`${yyyy}-${mm}-${dd}`);
+    curr.setUTCDate(curr.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+const inboundVsProjectionReport = computed(() => {
+  const dates = getDatesInRange(filterStartDate.value, filterEndDate.value);
+  
+  return dates.map(date => {
+    // Projections for this date
+    const dayProjections = store.projection.filter(p => p.date === date);
+    const projectedVolume = dayProjections.reduce((sum, p) => sum + p.volume, 0);
+    
+    // Inbounds for this date
+    const dayInbounds = localInbounds.value.filter(i => i.date_inbound === date);
+    const actualVolume = dayInbounds.reduce((sum, i) => sum + (Number(i.total_order) || 0), 0);
+    
+    const gap = actualVolume - projectedVolume;
+    
+    // Status interpretation
+    let status = 'Sesuai Target';
+    let statusClass = 'text-emerald-700 bg-emerald-50 border-emerald-100';
+    if (projectedVolume > 0) {
+      const percentage = (actualVolume / projectedVolume) * 100;
+      if (percentage === 0) {
+        status = 'Belum Ada Aktual';
+        statusClass = 'text-rose-600 bg-rose-50 border-rose-100';
+      } else if (percentage < 30) {
+        status = 'Deviasi Kritis';
+        statusClass = 'text-rose-600 bg-rose-50 border-rose-100';
+      } else if (percentage < 90) {
+        status = 'Kurang (Di Bawah Proyeksi)';
+        statusClass = 'text-amber-600 bg-amber-50 border-amber-100';
+      } else if (percentage > 120) {
+        status = 'Over-Volume';
+        statusClass = 'text-indigo-600 bg-indigo-50 border-indigo-100';
+      } else {
+        status = 'Sesuai Estimasi';
+        statusClass = 'text-emerald-700 bg-emerald-50 border-emerald-100';
+      }
+    } else if (actualVolume > 0) {
+      status = 'Inbound Tanpa Proyeksi';
+      statusClass = 'text-slate-500 bg-slate-50 border-slate-100';
+    } else {
+      status = 'Nihil';
+      statusClass = 'text-slate-400 bg-slate-50 border-slate-100';
+    }
+    
+    return {
+      date,
+      projectedVolume,
+      actualVolume,
+      gap,
+      status,
+      statusClass
+    };
+  });
+});
+
+const totalProjectedInRange = computed(() => {
+  return inboundVsProjectionReport.value.reduce((sum, r) => sum + r.projectedVolume, 0);
+});
+
+const totalActualInRange = computed(() => {
+  return inboundVsProjectionReport.value.reduce((sum, r) => sum + r.actualVolume, 0);
+});
+
+const totalGapInRange = computed(() => {
+  return totalActualInRange.value - totalProjectedInRange.value;
+});
+
+const maxInboundVolumeInRange = computed(() => {
+  const maxVal = Math.max(
+    ...inboundVsProjectionReport.value.map(r => Math.max(r.projectedVolume, r.actualVolume)),
+    100 // Avoid division by zero
+  );
+  return maxVal;
+});
+
+function formatIndoDate(dateStr: string) {
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  return `${parts[2]} ${months[parseInt(parts[1], 10) - 1]}`;
+}
 </script>
 
 <template>
@@ -165,6 +298,257 @@ const todayDateFormatted = computed(() => {
         @click="navigateToMenu('std')"
         class="cursor-pointer"
       />
+    </div>
+
+    <!-- INBOUND VS PROJECTION ANALYTICS CONSOLE (COMPARISON & GAP PANEL) -->
+    <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-5 animate-fade-in">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between border-b border-slate-100 pb-4 gap-4">
+        <div>
+          <div class="flex items-center gap-2">
+            <div class="p-1.5 bg-blue-50 text-blue-600 rounded-lg border border-blue-100">
+              <FileSpreadsheet class="w-4 h-4" />
+            </div>
+            <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Perbandingan Inbound Actual vs Proyeksi</h3>
+          </div>
+          <p class="text-xs text-slate-500 mt-1">Pantau kesenjangan (gap) volume kedatangan riil dengan perencanaan estimasi kebutuhan kargo.</p>
+        </div>
+
+        <!-- Date Range Pickers -->
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex items-center gap-2 bg-slate-50 border border-slate-150 rounded-xl px-3.5 py-1.5 shadow-2xs">
+            <Calendar class="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <div class="flex flex-wrap items-center gap-1.5 text-2xs font-extrabold text-slate-600">
+              <span>Dari:</span>
+              <input 
+                type="date" 
+                v-model="filterStartDate"
+                class="bg-transparent border-0 p-0 text-slate-800 font-mono focus:ring-0 w-24 cursor-pointer font-bold"
+              />
+              <span class="text-slate-300">|</span>
+              <span>S/D:</span>
+              <input 
+                type="date" 
+                v-model="filterEndDate"
+                class="bg-transparent border-0 p-0 text-slate-800 font-mono focus:ring-0 w-24 cursor-pointer font-bold"
+              />
+            </div>
+          </div>
+          
+          <button 
+            type="button" 
+            class="px-3 py-1.5 text-2xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 active:scale-95 transition rounded-lg border border-blue-100 cursor-pointer"
+            @click="filterStartDate = '2026-05-30'; filterEndDate = '2026-06-03'"
+          >
+            Reset Range
+          </button>
+        </div>
+      </div>
+
+      <!-- Overview KPI Cards within selected date range -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="border border-slate-150 hover:border-slate-300 transition duration-150 p-4 rounded-xl bg-slate-50/50 flex items-center justify-between">
+          <div class="space-y-1">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Proyeksi (Estimasi)</span>
+            <span class="text-xl font-extrabold text-slate-800 font-mono">{{ totalProjectedInRange }}</span>
+            <span class="text-2xs text-slate-500 block">Pcs direncanakan</span>
+          </div>
+          <div class="w-10 h-10 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold font-mono">
+            P
+          </div>
+        </div>
+
+        <div class="border border-slate-150 hover:border-slate-300 transition duration-150 p-4 rounded-xl bg-slate-50/50 flex items-center justify-between">
+          <div class="space-y-1">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Inbound Aktual</span>
+            <span class="text-xl font-extrabold text-emerald-600 font-mono">{{ totalActualInRange }}</span>
+            <span class="text-2xs text-slate-500 block">Pcs tiba di gudang</span>
+          </div>
+          <div class="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 font-bold font-mono">
+            A
+          </div>
+        </div>
+
+        <div class="border border-slate-150 hover:border-slate-300 transition duration-150 p-4 rounded-xl flex items-center justify-between"
+          :class="totalGapInRange < 0 ? 'bg-rose-50/20 border-rose-150' : 'bg-emerald-50/15 border-emerald-150'"
+        >
+          <div class="space-y-1">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block font-bold">Kesenjangan (Volum Gap)</span>
+            <div class="flex items-center gap-1.5">
+              <span class="text-xl font-extrabold font-mono"
+                :class="totalGapInRange < 0 ? 'text-rose-600' : 'text-emerald-700'"
+              >
+                {{ totalGapInRange >= 0 ? '+' : '' }}{{ totalGapInRange }}
+              </span>
+              <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase font-sans border"
+                :class="totalGapInRange < 0 ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-emerald-100 text-emerald-850 border-emerald-200'"
+              >
+                <component :is="totalGapInRange >= 0 ? TrendingUp : TrendingDown" class="w-2.2 h-2.2" />
+                {{ totalGapInRange < 0 ? 'Shortage' : 'Surplus' }}
+              </span>
+            </div>
+            <span class="text-2xs text-slate-500 block">Selisih Aktual - Proyeksi</span>
+          </div>
+          <div class="w-10 h-10 rounded-full flex items-center justify-center text-xs font-black font-sans border"
+            :class="totalGapInRange < 0 ? 'bg-rose-100 border-rose-200 text-rose-700' : 'bg-emerald-100 border-emerald-200 text-emerald-700'"
+          >
+            {{ totalGapInRange >= 0 ? 'OK' : 'GAP' }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Dual visual section: SVG comparative bar chart and table list representation -->
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-5 pt-2">
+        
+        <!-- Comparative Bar Chart -->
+        <div class="border border-slate-200 rounded-xl p-4.5 bg-slate-50/40 relative">
+          <div class="flex items-center justify-between mb-4 border-b border-slate-100 pb-2">
+            <span class="text-xs font-black text-slate-705 uppercase tracking-wider block">Visualisasi Tren Harian</span>
+            <div class="flex items-center gap-2.5 text-3xs font-black">
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 bg-indigo-500 rounded"></span> Proyeksi (P)</span>
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 bg-emerald-500 rounded"></span> Aktual (A)</span>
+            </div>
+          </div>
+
+          <!-- Pure SVG Custom Comparison Side-by-Side Bar Chart -->
+          <div class="w-full h-44 relative flex items-end">
+            <svg class="w-full h-full" viewBox="0 0 500 160" preserveAspectRatio="none">
+              <!-- Horizontal background guidelines -->
+              <line x1="25" y1="15" x2="485" y2="15" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="2" />
+              <line x1="25" y1="50" x2="485" y2="50" stroke="#f1f5f9" stroke-width="1" />
+              <line x1="25" y1="85" x2="485" y2="85" stroke="#f1f5f9" stroke-width="1" />
+              <line x1="25" y1="120" x2="485" y2="120" stroke="#f8fafc" stroke-width="1" />
+
+              <g v-for="(row, idx) in inboundVsProjectionReport" :key="row.date">
+                <!-- Group coordinates computing X offset dynamically -->
+                <g :transform="`translate(${25 + idx * (460 / Math.max(inboundVsProjectionReport.length, 1))}, 0)`">
+                  <!-- Projected bar -->
+                  <rect 
+                    :x="((460 / Math.max(inboundVsProjectionReport.length, 1)) / 2) - 15" 
+                    :y="135 - ((row.projectedVolume / maxInboundVolumeInRange) * 110)" 
+                    width="12" 
+                    :height="(row.projectedVolume / maxInboundVolumeInRange) * 110" 
+                    fill="#6366f1" 
+                    rx="2"
+                    class="hover:fill-indigo-700 transition"
+                  >
+                    <title>Hari: {{ row.date }} | Proyeksi: {{ row.projectedVolume }} pcs</title>
+                  </rect>
+
+                  <!-- Actual Inbound bar -->
+                  <rect 
+                    :x="((460 / Math.max(inboundVsProjectionReport.length, 1)) / 2) + 1" 
+                    :y="135 - ((row.actualVolume / maxInboundVolumeInRange) * 110)" 
+                    width="12" 
+                    :height="(row.actualVolume / maxInboundVolumeInRange) * 110" 
+                    fill="#10b981" 
+                    rx="2"
+                    class="hover:fill-emerald-650 transition"
+                  >
+                    <title>Hari: {{ row.date }} | Aktual: {{ row.actualVolume }} pcs</title>
+                  </rect>
+
+                  <!-- Labels inline above bar for direct quick scan -->
+                  <text 
+                    v-if="row.projectedVolume > 0"
+                    :x="((460 / Math.max(inboundVsProjectionReport.length, 1)) / 2) - 9" 
+                    :y="130 - ((row.projectedVolume / maxInboundVolumeInRange) * 110)" 
+                    class="text-[8px] font-black fill-slate-500 font-mono" 
+                    text-anchor="middle"
+                  >
+                    {{ row.projectedVolume }}
+                  </text>
+
+                  <text 
+                    v-if="row.actualVolume > 0"
+                    :x="((460 / Math.max(inboundVsProjectionReport.length, 1)) / 2) + 7" 
+                    :y="130 - ((row.actualVolume / maxInboundVolumeInRange) * 110)" 
+                    class="text-[8px] font-black fill-emerald-600 font-mono" 
+                    text-anchor="middle"
+                  >
+                    {{ row.actualVolume }}
+                  </text>
+
+                  <!-- Date under columns -->
+                  <text 
+                    :x="(460 / Math.max(inboundVsProjectionReport.length, 1)) / 2" 
+                    y="150" 
+                    class="text-[9px] font-bold fill-slate-400 font-sans" 
+                    text-anchor="middle"
+                  >
+                    {{ formatIndoDate(row.date) }}
+                  </text>
+                </g>
+              </g>
+            </svg>
+          </div>
+          <div v-if="inboundVsProjectionReport.length === 0" class="absolute inset-0 bg-slate-50/90 flex flex-col items-center justify-center text-center p-4">
+            <p class="text-xs font-bold text-slate-500">Masa tanggal filter kosong</p>
+            <p class="text-2xs text-slate-400 mt-1">Harap ganti start-date/end-date pada input di atas.</p>
+          </div>
+        </div>
+
+        <!-- Comparative Grid Table -->
+        <div class="border border-slate-200 rounded-xl overflow-hidden flex flex-col justify-between bg-white">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-2xs border-collapse">
+              <thead>
+                <tr class="bg-slate-50 border-b border-slate-100 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                  <th class="py-2.5 px-3">Tanggal</th>
+                  <th class="py-2.5 px-3 text-center">Proyeksi (A)</th>
+                  <th class="py-2.5 px-3 text-center">Aktual (B)</th>
+                  <th class="py-2.5 px-3 text-center">Gap (B-A)</th>
+                  <th class="py-2.5 px-3 text-center">Status Pemenuhan</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 text-slate-700 font-medium select-none">
+                <tr v-for="row in inboundVsProjectionReport" :key="row.date" class="hover:bg-slate-50/50 transition">
+                  <td class="py-2 px-3 font-bold text-slate-800">
+                    {{ formatIndoDate(row.date) }}
+                    <span class="text-[9px] font-mono font-normal text-slate-400 block">{{ row.date }}</span>
+                  </td>
+                  <td class="py-2 px-3 text-center font-mono font-bold text-indigo-700">
+                    {{ row.projectedVolume || '-' }}
+                  </td>
+                  <td class="py-2 px-3 text-center font-mono font-bold text-emerald-600">
+                    {{ row.actualVolume || '-' }}
+                  </td>
+                  <td class="py-2 px-3 text-center font-mono font-bold">
+                    <span 
+                      v-if="row.gap !== 0"
+                      :class="row.gap < 0 ? 'text-rose-600 font-extrabold' : 'text-emerald-700 font-extrabold'"
+                    >
+                      {{ row.gap > 0 ? '+' : '' }}{{ row.gap }}
+                    </span>
+                    <span v-else class="text-slate-400">-</span>
+                  </td>
+                  <td class="py-2 px-3 text-center">
+                    <span class="inline-block px-2 py-0.5 rounded text-[9px] font-bold border" :class="row.statusClass">
+                      {{ row.status }}
+                    </span>
+                  </td>
+                </tr>
+                <tr v-if="inboundVsProjectionReport.length === 0">
+                  <td colspan="5" class="py-8 text-center text-slate-400 pb-12">
+                    Tidak ada baris data. Ganti jangka filter tanggal.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="p-3 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-2xs text-slate-400 font-semibold">
+            <span>💡 *Seluruh volume dalam pcs (kargo paket)</span>
+            <button 
+              type="button" 
+              class="text-blue-600 hover:underline cursor-pointer font-bold"
+              @click="navigateToMenu('inbound')"
+            >
+              Kelola Inbound &rarr;
+            </button>
+          </div>
+        </div>
+
+      </div>
     </div>
 
     <!-- CHANNELS: ALERTS & CHARTS WORKSPACE FLUID GRID-->
