@@ -54,10 +54,36 @@ async function fetchProjectionsApi() {
     }
 
     // Map fetched properties safely matching ProjectionData schema
-    const mappedData: ProjectionData[] = rawItems.map((item: any) => ({
-      date_inbound: item.date_inbound || new Date().toISOString().substring(0, 10),
-      projected_inbound: Number(item.projected_inbound) || 0
-    }));
+    const mappedData: ProjectionData[] = rawItems.map((item: any) => {
+      // Prioritize date_inbound from the API or legacy fallbacks
+      let dateVal = item.date_inbound || item.date || item.tanggal;
+      if (dateVal && dateVal.includes('T')) {
+        dateVal = dateVal.split('T')[0];
+      }
+      
+      const date = dateVal || new Date().toISOString().substring(0, 10);
+      
+      // Prioritize projected_inbound volume or legacy fallbacks
+      let volume = 100;
+      if (item.projected_inbound !== undefined && item.projected_inbound !== null) {
+        volume = Number(item.projected_inbound);
+      } else if (item.volume !== undefined && item.volume !== null) {
+        volume = Number(item.volume);
+      } else if (item.total !== undefined && item.total !== null) {
+        volume = Number(item.total);
+      }
+
+      return {
+        date,
+        volume,
+        category: item.category || item.kategori || 'General Goods',
+        origin: item.origin || item.asal || 'Hub Warehouse',
+        pic: item.pic || item.petugas || 'Admin WMS',
+        status: ['priority', 'prioritas', 'pending'].includes(item.status?.toLowerCase())
+          ? (item.status.toLowerCase() === 'prioritas' ? 'priority' : item.status.toLowerCase()) as 'priority' | 'pending'
+          : 'pending'
+      };
+    });
 
     // Update logistics store
     store.importData('projection', mappedData);
@@ -188,13 +214,66 @@ function onClearData() {
 const filterStartDate = ref('');
 const filterEndDate = ref('');
 
+// Normalize different date formats to comparable standard YYYY-MM-DD
+function normalizeDateOnly(dateValue: any): string {
+  if (!dateValue) return '';
+  const dateStr = String(dateValue).trim();
+  
+  // 1. ISO format or starts with YYYY-MM-DD (e.g. 2026-05-30T12:00:00Z)
+  if (dateStr.includes('T')) {
+    return dateStr.split('T')[0];
+  }
+  
+  // 2. Space format split (e.g. 2026-05-30 00:00:00)
+  if (dateStr.includes(' ')) {
+    return dateStr.split(' ')[0];
+  }
+  
+  // 3. European / ID format matching DD/MM/YYYY or DD-MM-YYYY
+  const euDateMatch = dateStr.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (euDateMatch) {
+    const day = euDateMatch[1].padStart(2, '0');
+    const month = euDateMatch[2].padStart(2, '0');
+    const year = euDateMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+  
+  // 4. US / normalized YYYY/MM/DD
+  const usDateMatch = dateStr.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (usDateMatch) {
+    const year = usDateMatch[1];
+    const month = usDateMatch[2].padStart(2, '0');
+    const day = usDateMatch[3].padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // 5. General fallback utilizing JS Date parse
+  try {
+    const parsed = new Date(dateStr);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  } catch (e) {}
+
+  return dateStr;
+}
+
 const filteredProjections = computed(() => {
   let list = store.projection;
   if (filterStartDate.value) {
-    list = list.filter(item => item.date >= filterStartDate.value);
+    list = list.filter(item => {
+      const cleanItemDate = normalizeDateOnly(item.date);
+      return cleanItemDate >= filterStartDate.value;
+    });
   }
   if (filterEndDate.value) {
-    list = list.filter(item => item.date <= filterEndDate.value);
+    list = list.filter(item => {
+      const cleanItemDate = normalizeDateOnly(item.date);
+      return cleanItemDate <= filterEndDate.value;
+    });
   }
   return list;
 });
@@ -205,8 +284,8 @@ function clearDateFilter() {
 }
 
 const columns = [
-  { key: 'date_inbound', label: 'Tanggal Proyeksi', type: 'string' },
-  { key: 'projected_inbound', label: 'Ekspektasi Volum', type: 'number' }
+  { key: 'date', label: 'Tanggal Proyeksi', type: 'string' },
+  { key: 'volume', label: 'Inbound Projected (Pcs)', type: 'number' }
 ];
 
 onMounted(() => {

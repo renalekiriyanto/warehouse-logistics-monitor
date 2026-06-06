@@ -12,7 +12,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'file-parsed', result: { text: string; fileName: string }): void;
+  (e: 'file-parsed', result: { text: string; fileName: string; file?: File }): void;
   (e: 'clear-data'): void;
 }>();
 
@@ -76,7 +76,7 @@ function processFile(file: File) {
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         const csvText = XLSX.utils.sheet_to_csv(worksheet);
-        emit('file-parsed', { text: csvText, fileName: file.name });
+        emit('file-parsed', { text: csvText, fileName: file.name, file });
       } catch (err: any) {
         uploadError.value = 'Gagal memproses berkas Excel: ' + err.message;
       } finally {
@@ -92,7 +92,7 @@ function processFile(file: File) {
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      emit('file-parsed', { text, fileName: file.name });
+      emit('file-parsed', { text, fileName: file.name, file });
       processing.value = false;
     };
     reader.onerror = () => {

@@ -77,6 +77,7 @@ function processLocalInboundsMapping(cleanItems: any[]) {
     }
 
     return {
+      id: item.id || `local-${Date.now()}-${Math.floor(Math.random() * 1050)}`,
       id_type_slot: slotId,
       name: foundSlotName || (typeof slotId === 'string' ? slotId : `Slot ${slotId}`),
       date_inbound: item.date_inbound || getTodayString(),
@@ -243,20 +244,24 @@ const lastFetchTime = ref<string | null>(null);
 
 // Inbound Items State with LocalStorage mapping & fallbacks
 const INITIAL_INBOUND = [
-  { name: 'Slot A - Pagi (08:00 - 12:00)', date_inbound: '2026-05-31', actual_arrival: '08:30', total_order: 12 },
-  { name: 'Slot B - Siang (12:00 - 16:00)', date_inbound: '2026-05-31', actual_arrival: '13:15', total_order: 25 },
-  { name: 'Slot C - Sore (16:00 - 20:00)', date_inbound: '2026-05-31', actual_arrival: '18:45', total_order: 8 }
+  { id: 'init-1', name: 'Slot A - Pagi (08:00 - 12:00)', date_inbound: '2026-05-31', actual_arrival: '08:30', total_order: 12 },
+  { id: 'init-2', name: 'Slot B - Siang (12:00 - 16:00)', date_inbound: '2026-05-31', actual_arrival: '13:15', total_order: 25 },
+  { id: 'init-3', name: 'Slot C - Sore (16:00 - 20:00)', date_inbound: '2026-05-31', actual_arrival: '18:45', total_order: 8 }
 ];
 
 const savedInbounds = localStorage.getItem('logistics_inbounds');
-const apiInboundItems = ref<any[]>(savedInbounds ? JSON.parse(savedInbounds) : INITIAL_INBOUND);
+const apiInboundItems = ref<any[]>(savedInbounds ? JSON.parse(savedInbounds).map((item: any, idx: number) => ({
+  id: item.id || `stored-${idx}-${Date.now()}`,
+  ...item
+})) : INITIAL_INBOUND);
 
 // Table scheme Columns definition without time_start, time_end, or ID Slot
 const inboundColumns = [
   { key: 'name', label: 'Tipe Slot', type: 'string' },
   { key: 'date_inbound_formatted', label: 'Tanggal Inbound', type: 'string' },
   { key: 'actual_arrival_formatted', label: 'Kedatangan Aktual', type: 'string' },
-  { key: 'total_order', label: 'Total Order', type: 'number' }
+  { key: 'total_order', label: 'Total Order', type: 'number' },
+  { key: 'action', label: 'Aksi', type: 'action' }
 ];
 
 // Reactive states for filters
@@ -728,6 +733,7 @@ async function fetchInboundsApi() {
       }
       
       return {
+        id: item.id || `server-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         id_type_slot: slotId || 1,
         name: slotName || `Slot ${Math.floor(100 + Math.random() * 900)}`,
         date_inbound: item.date_inbound || item.tanggal || getTodayString(),
@@ -825,6 +831,43 @@ function resetForm() {
   formActualArrival.value = '10:00';
   formTotalOrder.value = null;
   showForm.value = false;
+}
+
+// Delete an inbound item sending a DELETE request to REST API
+async function deleteInbound(item: any) {
+  if (!confirm(`Apakah Anda yakin ingin menghapus data inbound untuk "${item.name}" tanggal ${formatFriendlyDate(item.date_inbound || '')}?`)) {
+    return;
+  }
+
+  const itemId = item.id;
+  showNotification('Sedang menghapus data inbound...', 'info');
+
+  try {
+    if (itemId && !String(itemId).startsWith('local-') && !String(itemId).startsWith('stored-') && !String(itemId).startsWith('init-')) {
+      // Send DELETE request using axios client.
+      await api.delete(`/inbounds/${itemId}`);
+      showNotification('Berhasil menghapus data inbound dari API Server!', 'success');
+    } else {
+      showNotification('Data inbound dihapus dari daftar lokal.', 'success');
+    }
+
+    // Always update local status & storage
+    apiInboundItems.value = apiInboundItems.value.filter(i => i.id !== itemId);
+    localStorage.setItem('logistics_inbounds', JSON.stringify(apiInboundItems.value));
+    
+    // Refresh list from server if online
+    try {
+      await fetchInboundsApi();
+    } catch (e) {
+      console.warn('Refresh inbounds API silent warning:', e);
+    }
+  } catch (err: any) {
+    console.error('DELETE ke API /inbounds gagal:', err);
+    // Fallback: Delete from local state & localStorage so that user is not blocked
+    apiInboundItems.value = apiInboundItems.value.filter(i => i.id !== itemId);
+    localStorage.setItem('logistics_inbounds', JSON.stringify(apiInboundItems.value));
+    showNotification('Gagal terhubung ke API Server. Data dihapus dari database lokal browser.', 'info');
+  }
 }
 
 function onClearData() {
@@ -1379,7 +1422,18 @@ onMounted(() => {
         v-else
         :items="filteredAndFormattedItems"
         :columns="inboundColumns"
-      />
+      >
+        <template #col-action="{ item }">
+          <button
+            type="button"
+            class="p-1 px-2 text-[10px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 active:scale-95 transition-all cursor-pointer inline-flex items-center gap-1 border border-rose-150 rounded-lg select-none shadow-3xs"
+            @click="deleteInbound(item)"
+          >
+            <Trash2 class="w-3.5 h-3.5 shrink-0" />
+            <span>Hapus</span>
+          </button>
+        </template>
+      </DataPreviewTable>
     </div>
   </div>
 </template>
