@@ -4,6 +4,7 @@ import { useLogisticsStore } from '../../store/logisticsStore';
 import { parseCSV } from '../../utils/csvParser';
 import stdSomedayService, { StdSomedayData } from '../../services/stdSomedayService';
 import DataPreviewTable from '../DataPreviewTable.vue';
+import ReminderSummaryModal from '../ReminderSummaryModal.vue';
 import * as XLSX from 'xlsx';
 import { 
   TableProperties, Server, RefreshCw, CheckCircle2, AlertCircle, 
@@ -61,6 +62,7 @@ const importUuid = ref<string | null>(null);
 const isUploading = ref(false);
 const isPolling = ref(false);
 const showProgressModal = ref(false);
+const isReminderModalOpen = ref(false);
 
 // Internal timer and support states
 const pollInterval = ref<any>(null);
@@ -614,7 +616,7 @@ onMounted(() => {
             @click="onClearData"
           >
             <Trash2 class="w-3.5 h-3.5" />
-            Reset Data Server
+            Reset Data
           </button>
 
           <button 
@@ -626,6 +628,16 @@ onMounted(() => {
           >
             <RefreshCw class="w-3.5 h-3.5" :class="{'animate-spin': isLoadingData}" />
             {{ isLoadingData ? 'Sinkronkan...' : 'Refresh Data' }}
+          </button>
+
+          <button 
+            id="btn-export-reminder"
+            type="button" 
+            class="flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition-all rounded-lg shadow-sm cursor-pointer select-none shrink-0"
+            @click="isReminderModalOpen = true"
+          >
+            <Bell class="w-3.5 h-3.5" />
+            Export Reminder
           </button>
         </div>
       </div>
@@ -1089,6 +1101,12 @@ onMounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- COURIER REMINDER MODAL -->
+  <ReminderSummaryModal 
+    :is-open="isReminderModalOpen" 
+    @close="isReminderModalOpen = false" 
+  />
 </template>
 
 <style scoped>

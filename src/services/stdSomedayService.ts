@@ -33,7 +33,51 @@ export interface UploadResponse {
   };
 }
 
+export interface ReminderDriverSummary {
+  driver: string;
+  total_awb: number;
+  delivering: number;
+  on_hold: number;
+  delivered: number;
+}
+
+export interface ReminderSummaryData {
+  generated_at: string;
+  total_courier: number;
+  total_awb: number;
+  drivers: ReminderDriverSummary[];
+}
+
+export interface ReminderSummaryResponse {
+  success: boolean;
+  data: ReminderSummaryData;
+}
+
+export interface ReminderMessageResponse {
+  success: boolean;
+  data: {
+    message: string;
+  };
+}
+
 export const stdSomedayService = {
+  /**
+   * Fetch courier data from standard reminder endpoint
+   * Target endpoint: POST http://127.0.0.1:8000/api/std-somedays/reminder-courier
+   */
+  async getReminderCourier(): Promise<any> {
+    const response = await api.post('/std-somedays/reminder-courier');
+    return response.data;
+  },
+
+  /**
+   * Fetch WhatsApp text for reminder message
+   * Target endpoint: GET http://127.0.0.1:8000/api/std-somedays/reminder-message
+   */
+  async getReminderMessage(): Promise<any> {
+    const response = await api.get('/std-somedays/reminder-message');
+    return response.data;
+  },
   /**
    * Fetch all records from std_somedays table on Laravel API
    * Target endpoint: GET http://127.0.0.1:8000/api/std-somedays
