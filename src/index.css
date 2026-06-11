@@ -6,3 +6,80 @@
   --font-display: "Space Grotesk", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
+
+/* Custom Status Badges styling */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: middle;
+  border: 1px solid transparent;
+  min-height: 1.5rem;
+}
+
+.rounded-pill {
+  border-radius: 50rem;
+}
+
+.font-weight-medium {
+  font-weight: 500;
+}
+
+.text-dark {
+  color: #1e293b !important;
+}
+
+.badge-warning {
+  background-color: #fef08a !important; /* Kuning / Amber bg */
+  color: #1e293b !important; /* dark text */
+  border-color: #fde047 !important;
+}
+
+.badge-danger {
+  background-color: #ef4444 !important; /* Merah bg */
+  color: #ffffff !important; /* white text */
+  border-color: #f87171 !important;
+}
+
+.badge-success {
+  background-color: #22c55e !important; /* Hijau bg */
+  color: #ffffff !important; /* white text */
+  border-color: #4ade80 !important;
+}
+
+.badge-info {
+  background-color: #06b6d4 !important; /* Biru muda bg */
+  color: #ffffff !important; /* white text */
+  border-color: #22d3ee !important;
+}
+
+.badge-primary {
+  background-color: #3b82f6 !important; /* Biru bg */
+  color: #ffffff !important; /* white text */
+  border-color: #60a5fa !important;
+}
+
+.badge-secondary {
+  background-color: #64748b !important; /* Abu-abu bg */
+  color: #ffffff !important; /* white text */
+  border-color: #94a3b8 !important;
+}
+
+.badge-dark {
+  background-color: #1e293b !important; /* Hitam / charcoal bg */
+  color: #ffffff !important; /* white text */
+  border-color: #334155 !important;
+}
+
+.badge-light {
+  background-color: #f1f5f9 !important; /* Terang bg */
+  color: #1f2937 !important; /* dark text */
+  border-color: #cbd5e1 !important;
+}
+

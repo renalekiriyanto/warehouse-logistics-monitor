@@ -5,32 +5,59 @@ const props = defineProps<{
   status: string;
 }>();
 
-const badgeClasses = computed(() => {
-  const s = props.status?.toLowerCase().trim();
+/**
+ * Maps delivery and other app statuses to corresponding custom CSS badge class names based on user requirements.
+ */
+function getStatusBadgeClass(status: string): string {
+  const s = String(status || '').trim().toLowerCase();
   
   switch (s) {
-    case 'completed':
-    case 'hadir':
-    case 'berhasil':
-      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    case 'pending':
-    case 'pagi':
-      return 'bg-blue-50 text-blue-700 border-blue-200';
+    case 'delivering':
+      return 'badge-warning';
+    
+    case 'onhold':
+    case 'on hold':
+    case 'on_hold':
     case 'delayed':
     case 'alpa':
     case 'gagal':
     case 'sangat penting':
-      return 'bg-rose-50 text-rose-700 border-rose-250 font-semibold';
-    case 'priority':
-    case 'penting':
-    case 'malam':
-      return 'bg-amber-50 text-amber-700 border-amber-250 font-medium';
-    case 'siang':
-    case 'izin':
-      return 'bg-slate-100 text-slate-700 border-slate-200';
+      return 'badge-danger';
+    
+    case 'delivered':
+    case 'completed':
+    case 'berhasil':
+    case 'hadir':
+      return 'badge-success';
+    
+    case 'lmhub_received':
+    case 'lmhub-received':
+      return 'badge-info';
+    
+    case 'lmhub_assigned':
+    case 'lmhub-assigned':
+    case 'assigned':
+      return 'badge-primary';
+    
+    case 'lmhub_assigning':
+    case 'lmhub-assigning':
+    case 'assigning':
+    case 'pending':
+    case 'pagi':
+      return 'badge-secondary';
+    
+    case 'return_lmhub_packed':
+    case 'return-lmhub-packed':
+    case 'packed':
+      return 'badge-dark';
+    
     default:
-      return 'bg-gray-50 text-gray-700 border-gray-200';
+      return 'badge-light text-dark';
   }
+}
+
+const computedBadgeClass = computed(() => {
+  return getStatusBadgeClass(props.status);
 });
 
 const labelText = computed(() => {
@@ -42,10 +69,11 @@ const labelText = computed(() => {
 <template>
   <span
     :id="'badge-' + status"
-    class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border"
-    :class="badgeClasses"
+    class="badge rounded-pill font-weight-medium transition shadow-3xs"
+    :class="computedBadgeClass"
   >
     <span class="w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-75"></span>
     {{ labelText }}
   </span>
 </template>
+

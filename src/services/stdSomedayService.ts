@@ -82,8 +82,8 @@ export const stdSomedayService = {
    * Fetch all records from std_somedays table on Laravel API
    * Target endpoint: GET http://127.0.0.1:8000/api/std-somedays
    */
-  async getAll(): Promise<StdSomedayData[]> {
-    const response = await api.get('/std-somedays');
+  async getAll(params?: Record<string, unknown>): Promise<StdSomedayData[]> {
+    const response = await api.get('/std-somedays', { params });
     const resData = response.data;
     if (resData && Array.isArray(resData.data)) {
       return resData.data;

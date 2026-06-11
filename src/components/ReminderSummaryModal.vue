@@ -71,7 +71,7 @@ function computeLocalFallbackSummary() {
   let totalCount = 0;
 
   list.forEach(item => {
-    const driverVal = item.courier || item.id_driver || 'N/A';
+    const driverVal = item.driver_name || item.courier || item.id_driver || 'N/A';
     if (!driversMap[driverVal]) {
       driversMap[driverVal] = {
         driver_name: driverVal,

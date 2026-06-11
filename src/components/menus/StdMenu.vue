@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useLogisticsStore } from '../../store/logisticsStore';
 import { parseCSV } from '../../utils/csvParser';
 import stdSomedayService, { StdSomedayData } from '../../services/stdSomedayService';
@@ -68,6 +68,8 @@ const isReminderModalOpen = ref(false);
 const pollInterval = ref<any>(null);
 const statusMessage = ref('Menghubungkan ke server...');
 const duration = ref(0);
+const batchErrors = ref<any[]>([]);
+const importStartTime = ref<number | null>(null);
 
 // Get All STD/Sameday deliveries
 async function fetchStdsApi() {
@@ -75,36 +77,59 @@ async function fetchStdsApi() {
   apiError.value = null;
   apiSuccess.value = false;
   try {
-    const rawItems = await stdSomedayService.getAll();
+    const params: any = {};
+    if (filterStartDate.value) {
+      params.start_date = filterStartDate.value;
+      params.start = filterStartDate.value;
+    }
+    if (filterEndDate.value) {
+      params.end_date = filterEndDate.value;
+      params.end = filterEndDate.value;
+    }
+
+    const rawItems = await stdSomedayService.getAll(params);
     
-    // Map Laravel DB properties (id, date_time, awb, id_driver, status) safely
-    // to match both the UI grid columns AND the Pinia store's schema.
-    const mappedItems = rawItems.map((item: any) => {
-      const dt = item.date_time || '';
-      const dateOnly = dt.includes(' ') ? dt.split(' ')[0] : (dt.includes('T') ? dt.split('T')[0] : '2026-05-30');
-      
-      return {
-        // Pinia Store backwards-compatibility properties
-        resi: item.awb || item.resi || `RESI-STD-${item.id}`,
-        courier: item.id_driver || item.courier || 'N/A',
-        target: 1,
-        completed: String(item.status).toLowerCase() === 'completed' ? 1 : 0,
-        pending: String(item.status).toLowerCase() !== 'completed' ? 1 : 0,
-        status: (String(item.status).toLowerCase() === 'completed' ? 'completed' : 
-                 (String(item.status).toLowerCase() === 'delayed' ? 'delayed' : 'pending')) as 'completed' | 'pending' | 'delayed',
-        date: dateOnly,
+    // Map Laravel DB properties safely to match both the UI grid columns and Pinia store state schema
+    if (rawItems && rawItems.length > 0) {
+      const mappedItems = rawItems.map((item: any) => {
+        // Safe fallback for date and time fields
+        const dateVal = item.date || (item.date_time && item.date_time.includes(' ') ? item.date_time.split(' ')[0] : (item.date_time && item.date_time.includes('T') ? item.date_time.split('T')[0] : '2026-05-30'));
+        const timeVal = item.time || (item.date_time && item.date_time.includes(' ') ? item.date_time.split(' ')[1] : '00:00');
+        
+        const driverName = item.driver_name || item.courier || 'N/A';
+        const driverId = item.driver_id ?? item.id_driver ?? '-';
+        
+        return {
+          // Pinia Store backwards-compatibility properties
+          resi: item.awb || item.resi || `RESI-STD-${item.id}`,
+          courier: driverName,
+          target: 1,
+          completed: ['completed', 'delivered'].includes(String(item.status).toLowerCase()) ? 1 : 0,
+          pending: !['completed', 'delivered'].includes(String(item.status).toLowerCase()) ? 1 : 0,
+          status: item.status || 'pending',
+          date: dateVal,
+          time: timeVal,
 
-        // Custom Target database properties
-        id: item.id,
-        date_time: item.date_time || '2026-05-30 00:00:00',
-        awb: item.awb || item.resi || '-',
-        id_driver: item.id_driver || item.courier || '-',
-      };
-    });
+          // Custom Target database properties
+          id: item.id,
+          date_time: item.date_time || `${dateVal} ${timeVal}`,
+          date: dateVal,
+          time: timeVal,
+          awb: item.awb || item.resi || '-',
+          driver_id: driverId,
+          driver_name: driverName,
+          id_driver: driverId,
+        };
+      });
 
-    store.importData('std', mappedItems);
-    apiSuccess.value = true;
-    lastFetchTime.value = new Date().toLocaleTimeString('id-ID');
+      store.importData('std', mappedItems);
+      apiSuccess.value = true;
+      lastFetchTime.value = new Date().toLocaleTimeString('id-ID');
+    } else {
+      store.importData('std', []); // reset/kosongkan store jika perlu
+      apiSuccess.value = true;     // tetap success, hanya datanya memang kosong
+      showNotification('Data tidak ditemukan untuk filter yang dipilih.', 'info');
+    }
   } catch (err: any) {
     console.error('STD API Fetch failed:', err);
     apiError.value = err.message || 'Koneksi ditolak oleh API FMS lokal (Server Offline atau CORS) di port 8000.';
@@ -228,6 +253,17 @@ function processSelectedFile(file: File) {
   fileDetails.value = null;
   selectedFile.value = null;
 
+  // Reset seluruh state import agar tidak campur dengan import sebelumnya
+  batchErrors.value = [];
+  successRows.value = 0;
+  failedRows.value = 0;
+  processedRows.value = 0;
+  totalRows.value = 0;
+  importStatus.value = null;
+  importProgress.value = 0;
+  uploadProgress.value = 0;
+  duration.value = 0;
+
   const suffix = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
   if (suffix !== '.csv' && suffix !== '.txt' && suffix !== '.xlsx' && suffix !== '.xls') {
     fileParsingError.value = 'Hanya menerima berkas format CSV (.csv, .txt) atau Excel (.xlsx, .xls) saja.';
@@ -326,6 +362,9 @@ function handleFileSelected(event: { text: string; fileName: string; file?: File
 /**
  * Real-time active batch job polling
  */
+/**
+ * Real-time active batch job polling
+ */
 const startPolling = (uuid: string) => {
   // Clear any existing polling interval to prevent memory leaks
   if (pollInterval.value) {
@@ -337,6 +376,11 @@ const startPolling = (uuid: string) => {
 
   pollInterval.value = setInterval(async () => {
     try {
+      // Live calculate duration in seconds
+      if (importStartTime.value) {
+        duration.value = Math.round((Date.now() - importStartTime.value) / 1000);
+      }
+
       const response = await stdSomedayService.getImportStatus(uuid);
       // Cleanly retrieve the data wrapper from the getImportStatus model response
       const batch = response.data;
@@ -344,12 +388,66 @@ const startPolling = (uuid: string) => {
         throw new Error('Sistem gagal memparsing respon progress import dari server.');
       }
 
+      // TEMPORARY DEBUGGING LOG as requested by user
+      console.log(
+        'IMPORT STATUS RESPONSE (Polling Progress)',
+        response.data
+      );
+
       importStatus.value = batch.status;
       importProgress.value = batch.progress ?? 0;
       processedRows.value = batch.processed_rows ?? 0;
       totalRows.value = batch.total_rows ?? 0;
-      successRows.value = batch.success_rows ?? 0;
-      failedRows.value = batch.failed_rows ?? 0;
+      
+      // Calculate success and failed rows according to backend schema fields
+      successRows.value = batch.success_rows ?? batch.success_count ?? 0;
+      failedRows.value = typeof batch.failed_rows === 'number' ? batch.failed_rows : (Array.isArray(batch.failed_rows) ? batch.failed_rows.length : (batch.failed_count ?? 0));
+
+      // Parse and normalize errors if present
+      // Support errors, validation_errors, failed_items, error_rows, and array-formatted failed_rows
+      const rawErrors = batch.errors || batch.validation_errors || batch.failed_items || batch.error_rows || (Array.isArray(batch.failed_rows) ? batch.failed_rows : []);
+      const normalizedErrors: any[] = [];
+      if (Array.isArray(rawErrors)) {
+        rawErrors.forEach((err: any) => {
+          if (typeof err === 'string') {
+            normalizedErrors.push({
+              row: '-',
+              awb: '-',
+              message: err
+            });
+          } else if (err && typeof err === 'object') {
+            normalizedErrors.push({
+              row: err.row || err.line || err.index || '-',
+              awb: err.awb || err.resi || err.barcode || '-',
+              message: err.message || err.error || err.reason || JSON.stringify(err)
+            });
+          }
+        });
+      } else if (rawErrors && typeof rawErrors === 'object') {
+        Object.entries(rawErrors).forEach(([key, val]: [string, any]) => {
+          if (Array.isArray(val)) {
+            val.forEach(item => {
+              normalizedErrors.push({
+                row: key,
+                awb: '-',
+                message: String(item)
+              });
+            });
+          } else {
+            normalizedErrors.push({
+              row: key,
+              awb: '-',
+              message: String(val)
+            });
+          }
+        });
+      }
+      batchErrors.value = normalizedErrors;
+
+      // Ensure failedRowsCount is also synced if we have parsed errors
+      if (batchErrors.value.length > 0 && failedRows.value === 0) {
+        failedRows.value = batchErrors.value.length;
+      }
 
       // Handle custom text status updates for user friendly indicators
       if (batch.status === 'queued') {
@@ -358,23 +456,31 @@ const startPolling = (uuid: string) => {
         statusMessage.value = 'Sedang memproses data...';
       } else if (batch.status === 'completed') {
         statusMessage.value = 'Import selesai';
-        showNotification(`Selesai memproses ${batch.success_rows} data dengan sukses.`, 'success');
+        showNotification(`Selesai memproses ${successRows.value} data dengan sukses.`, 'success');
         
+        // TEMPORARY DEBUGGING LOG as requested by user
+        console.log(
+          'IMPORT STATUS RESPONSE (Completed State)',
+          response.data
+        );
+
         clearInterval(pollInterval.value);
         pollInterval.value = null;
         isPolling.value = false;
 
-        // Auto close and reload
-        setTimeout(async () => {
-          showProgressModal.value = false;
-          await fetchStdsApi();
-          discardDraft();
-        }, 1500);
+        // Auto reload table data in background, but keep the modal open
+        await fetchStdsApi();
 
       } else if (batch.status === 'failed') {
-        statusMessage.value = 'Import gagal';
+        statusMessage.value = batch.message || 'Import gagal';
         showNotification('Proses import gagal atau dibatalkan di server.', 'error');
         
+        // TEMPORARY DEBUGGING LOG as requested by user
+        console.log(
+          'IMPORT STATUS RESPONSE (Failed State)',
+          response.data
+        );
+
         clearInterval(pollInterval.value);
         pollInterval.value = null;
         isPolling.value = false;
@@ -405,6 +511,9 @@ async function onStartUpload() {
   totalRows.value = fileDetails.value?.rows || 0;
   isUploading.value = true;
   isPolling.value = false;
+  batchErrors.value = [];
+  importStartTime.value = Date.now();
+  duration.value = 0;
 
   try {
     // Post Multi-part form data to Laravel API with upload progress callback
@@ -414,6 +523,12 @@ async function onStartUpload() {
         uploadProgress.value = Math.max(1, percent);
       }
     });
+
+    // TEMPORARY DEBUGGING LOG as requested by user
+    console.log(
+      'IMPORT STATUS RESPONSE (Upload Selesai)',
+      uploadResult.data
+    );
 
     // STEP 3: SUCCESSFUL UPLOAD TRANSITION
     statusMessage.value = '✓ File uploaded successfully';
@@ -530,34 +645,28 @@ function normalizeDateOnly(dateValue: any): string {
   return dateStr;
 }
 
-// Date Filter computed list
-const filteredStds = computed(() => {
-  let list = store.std;
-  if (filterStartDate.value) {
-    list = list.filter(item => {
-      const itemDate = normalizeDateOnly(item.date_time || item.date || '2026-05-30');
-      return itemDate >= filterStartDate.value;
-    });
-  }
-  if (filterEndDate.value) {
-    list = list.filter(item => {
-      const itemDate = normalizeDateOnly(item.date_time || item.date || '2026-05-30');
-      return itemDate <= filterEndDate.value;
-    });
-  }
-  return list;
+// Date Filter watch & fetch logic
+let debounceTimer: any = null;
+watch([filterStartDate, filterEndDate], () => {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    fetchStdsApi();
+  }, 400);
 });
+
+const filteredStds = computed(() => store.std);
 
 function clearDateFilter() {
   filterStartDate.value = '';
   filterEndDate.value = '';
 }
 
-// Columns Schema mapped for target database: id, date_time, awb, id_driver, status
+// Columns Schema mapped for target database: id, date, time, awb, driver_id, driver_name, status
 const columns = [
-  { key: 'date_time', label: 'Tanggal & Waktu (date_time)', type: 'string' },
+  { key: 'date', label: 'Tanggal (date)', type: 'string' },
+  { key: 'time', label: 'Jam (time)', type: 'string' },
   { key: 'awb', label: 'No. AWB (awb)', type: 'string' },
-  { key: 'id_driver', label: 'ID Driver (id_driver)', type: 'string' },
+  { key: 'driver_name', label: 'Nama Driver (driver_name)', type: 'string' },
   { key: 'status', label: 'Status Pengiriman', type: 'status' }
 ];
 
@@ -809,7 +918,7 @@ onMounted(() => {
               >
                 <div class="flex items-center justify-between font-mono text-slate-600 text-[10px]">
                   <span class="text-slate-800 font-bold">Resi/AWB: {{ row.awb }}</span>
-                  <span>Driver Code: {{ row.id_driver }}</span>
+                  <span>Driver: {{ row.driver_name }}</span>
                 </div>
                 <div class="text-[10px] text-slate-400 flex items-center justify-between">
                   <span>Waktu: {{ row.date_time }}</span>
@@ -822,25 +931,34 @@ onMounted(() => {
           </div>
           <div class="text-[10px] text-slate-400 mt-2 flex items-center gap-1">
             <Activity class="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span>Driver Name tidak disimpan. Sistem otomatis menyambungkan Date + Time ke kolom tunggal <code class="font-mono bg-slate-200 px-1 py-0.2 rounded font-bold text-slate-600">date_time</code>.</span>
+            <span>Seluruh data Driver (ID & Nama), Tanggal, Jam, No AWB, dan Status disimpan secara dinamis ke database backend.</span>
           </div>
         </div>
       </div>
 
       <!-- Active processing metrics inside the card too for complete live visibility -->
-      <div v-else class="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center space-y-2">
-        <div class="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 mx-auto">
-          <Database class="w-4 h-4" />
+      <div v-else class="p-6 bg-slate-50 border border-slate-200 rounded-xl text-center space-y-4">
+        <div class="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center mx-auto">
+          <Database class="w-5 h-5" />
         </div>
-        <div class="text-xs">
-          <h4 class="font-extrabold text-slate-700 uppercase tracking-wide">Mapping Database Target 'std_somedays'</h4>
-          <p class="text-slate-500 max-w-lg leading-relaxed mx-auto mt-1">
-            Format wajib di dalam berkas: <code class="font-mono text-blue-600 bg-white border px-1 py-0.5 rounded text-[10px]">Date</code>, 
-            <code class="font-mono text-blue-600 bg-white border px-1 py-0.5 rounded text-[10px]">Time</code>, 
-            <code class="font-mono text-blue-600 bg-white border px-1 py-0.5 rounded text-[10px]">AWB</code>, 
-            <code class="font-mono text-blue-600 bg-white border px-1 py-0.5 rounded text-[10px]">ID Driver</code>, 
-            <code class="font-mono text-blue-600 bg-white border px-1 py-0.5 rounded text-[10px]">Driver Name</code>, 
-            <code class="font-mono text-blue-600 bg-white border px-1 py-0.5 rounded text-[10px]">Status</code>.
+        <div class="text-xs max-w-md mx-auto space-y-3">
+          <h4 class="font-extrabold text-slate-800 uppercase tracking-wider">Metode Deteksi Format Otomatis</h4>
+          
+          <div class="bg-white border border-slate-150 rounded-lg p-4 text-left space-y-2.5 shadow-3xs">
+            <p class="font-bold text-slate-700">Format yang didukung:</p>
+            <div class="space-y-1.5 text-slate-600 font-medium">
+              <div class="flex items-center gap-2 text-emerald-600">
+                <span class="font-bold text-sm">✓</span> Legacy STD CSV
+              </div>
+              <div class="flex items-center gap-2 text-emerald-600">
+                <span class="font-bold text-sm">✓</span> Shopee Direct CSV
+              </div>
+            </div>
+          </div>
+          
+          <p class="text-slate-500 leading-relaxed">
+            Sistem akan mendeteksi format file secara otomatis.<br/>
+            Tidak diperlukan proses edit atau mapping Excel sebelum upload.
           </p>
         </div>
       </div>
@@ -919,14 +1037,14 @@ onMounted(() => {
     <div 
       v-if="showProgressModal" 
       id="import-progress-modal-backdrop"
-      class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in"
+      class="fixed inset-0 bg-slate-900/60 backdrop-blur-3xs flex items-center justify-center p-4 z-50 animate-fade-in"
     >
-      <div id="import-progress-modal" class="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-scale-up">
+      <div id="import-progress-modal" class="bg-white border border-slate-200 rounded-2xl max-w-xl w-full shadow-2xl overflow-hidden animate-scale-up transition-all duration-300">
         <!-- Modal Heading Header -->
         <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div class="flex items-center gap-2.5">
-            <div class="w-9 h-9 rounded-xl bg-blue-50 border border-blue-105 text-blue-600 flex items-center justify-center shrink-0">
-              <RefreshCw class="w-4 h-4 animate-spin" v-if="importStatus === 'uploading' || importStatus === 'queued' || importStatus === 'processing'" />
+            <div class="w-9 h-9 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+              <RefreshCw class="w-4 h-4 animate-spin" v-if="['uploading', 'queued', 'processing'].includes(importStatus || '')" />
               <Check class="w-4 h-4 text-emerald-600" v-else-if="importStatus === 'completed'" />
               <AlertTriangle class="w-4 h-4 text-rose-500" v-else />
             </div>
@@ -938,8 +1056,8 @@ onMounted(() => {
           <button 
             type="button" 
             class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer transition-colors" 
-            :disabled="importStatus === 'uploading' || importStatus === 'processing' || importStatus === 'queued'"
-            @click="showProgressModal = false"
+            :disabled="['uploading', 'processing', 'queued'].includes(importStatus || '')"
+            @click="showProgressModal = false; discardDraft();"
           >
             <X class="w-4 h-4" />
           </button>
@@ -972,131 +1090,154 @@ onMounted(() => {
             <div class="flex items-center gap-2">
               <span 
                 class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black"
-                :class="importStatus === 'completed' ? 'bg-emerald-550 text-white bg-emerald-500' : 'bg-slate-100 text-slate-400'"
+                :class="importStatus === 'completed' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400'"
               >
                 3
               </span>
-              <span class="font-bold text-[10px] uppercase tracking-wide" :class="importStatus==='completed'?'text-emerald-600':'text-slate-400'">Selesai</span>
+              <span class="font-bold text-[10px] uppercase tracking-wide" :class="importStatus==='completed'?'text-emerald-605 text-emerald-600':'text-slate-400'">Selesai</span>
             </div>
           </div>
 
-          <!-- Status Text Label -->
-          <div class="text-center space-y-1 py-1">
-            <p class="font-black text-slate-800 text-sm font-sans tracking-tight">{{ statusMessage }}</p>
-            <p class="text-2xs text-slate-400 font-medium">Jangan menutup portal layar ini sewaktu penyelarasan sedang berjalan.</p>
+          <!-- STATE BANNER ANNOUNCEMENT -->
+          <div v-if="importStatus === 'completed'" class="bg-emerald-50 border border-emerald-250/60 rounded-xl p-4 flex items-center gap-3">
+            <span class="text-xl">✅</span>
+            <div>
+              <p class="font-extrabold text-emerald-800 text-[13px]">Import Berhasil</p>
+              <p class="text-[10px] text-emerald-600 font-medium">Seluruh baris valid telah selesai disalin ke database Laravel.</p>
+            </div>
+          </div>
+
+          <div v-else-if="importStatus === 'failed'" class="bg-rose-50 border border-rose-250/60 rounded-xl p-4 flex items-center gap-3 animate-head-shake">
+            <span class="text-xl">❌</span>
+            <div>
+              <p class="font-extrabold text-rose-800 text-[13px]">Import Gagal</p>
+              <p class="text-[10px] text-rose-600 font-medium leading-relaxed">{{ statusMessage }}</p>
+            </div>
           </div>
 
           <!-- Progress Bar Realtime (Uploading, Queued & Processing states) -->
-          <div v-if="['uploading', 'queued', 'processing'].includes(importStatus || '')" class="space-y-2">
-            <div class="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden relative border border-slate-150">
+          <div v-if="['uploading', 'queued', 'processing'].includes(importStatus || '')" class="space-y-2.5">
+            <div class="w-full bg-slate-150 h-2.5 rounded-full overflow-hidden relative border border-slate-200">
               <div 
                 class="bg-blue-600 h-full transition-all duration-300 rounded-full"
                 :style="{ width: (importStatus === 'processing' ? importProgress : (importStatus === 'queued' ? 0 : uploadProgress)) + '%' }"
               ></div>
             </div>
-            <div class="flex items-center justify-between text-slate-400 font-mono text-[10px] font-bold">
-              <span>PROGRESS</span>
-              <span class="text-slate-700 font-black">
-                {{ importStatus === 'processing' ? importProgress : (importStatus === 'queued' ? 0 : uploadProgress) }}%
+            
+            <!-- Processed Rows Metrics & Percentage -->
+            <div class="flex items-center justify-between text-slate-500 font-mono text-[11px] font-bold">
+              <span class="uppercase tracking-wider">PROGRESS</span>
+              <span class="text-slate-800 font-black">
+                {{ processedRows }} / {{ totalRows }} ({{ importStatus === 'processing' ? importProgress : (importStatus === 'queued' ? 0 : uploadProgress) }}%)
               </span>
             </div>
           </div>
 
-          <!-- Processing Status Statistics Real-time Breakdown (Queued & Processing) -->
-          <div v-if="['queued', 'processing'].includes(importStatus || '')" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 font-sans">
-            <div class="flex items-center justify-between text-[11px] border-b border-slate-200/60 pb-1.5 text-slate-400 font-bold">
-              <span>METRIK ANTREAN</span>
-              <span class="text-blue-600 flex items-center gap-1">
-                <Clock class="w-3 h-3 animate-spin" /> REALTIME BATCH POLLING
-              </span>
-            </div>
+          <!-- RINGKASAN IMPORT STATS CARD -->
+          <div class="bg-slate-50 border border-slate-200 rounded-xl p-4.5 space-y-3 font-sans">
+            <p class="font-extrabold text-slate-500 text-[10px] tracking-wider uppercase border-b border-slate-200 pb-1.5 flex items-center justify-between">
+              <span>Ringkasan Import</span>
+              <span class="text-slate-400 font-mono font-normal">TIMED PERFORMANCE</span>
+            </p>
 
-            <div class="grid grid-cols-2 gap-3 font-mono font-bold text-center">
-              <div class="bg-white border border-slate-150 rounded-lg p-2">
-                <span class="text-[9px] text-slate-400 block uppercase">Total Baris</span>
-                <span class="text-base text-slate-800 font-black block mt-0.5">{{ totalRows }}</span>
+            <div class="grid grid-cols-5 gap-2 text-center font-mono font-bold">
+              <div class="bg-white border border-slate-150 rounded-lg p-2 col-span-1 min-w-[70px]">
+                <span class="text-[8px] text-slate-400 block uppercase">Total Rows</span>
+                <span class="text-xs text-slate-800 font-black block mt-0.5">{{ totalRows }}</span>
               </div>
-              <div class="bg-white border border-slate-150 rounded-lg p-2">
-                <span class="text-[9px] text-slate-400 block uppercase">Diproses</span>
-                <span class="text-base text-blue-600 font-black block mt-0.5">{{ processedRows }}</span>
+              <div class="bg-white border border-slate-150 rounded-lg p-2 col-span-1 min-w-[70px]">
+                <span class="text-[8px] text-slate-400 block uppercase">Processed</span>
+                <span class="text-xs text-blue-600 font-black block mt-0.5">{{ processedRows }}</span>
               </div>
-              <div class="bg-white border border-slate-150 rounded-lg p-2">
-                <span class="text-[9px] text-emerald-600 block uppercase">Sukses</span>
-                <span class="text-base text-emerald-600 font-black block mt-0.5">{{ successRows }}</span>
+              <div class="bg-white border border-slate-150 rounded-lg p-2 col-span-1 min-w-[70px]">
+                <span class="text-[8px] text-emerald-600 block uppercase">Success</span>
+                <span class="text-xs text-emerald-600 font-black block mt-0.5">{{ successRows }}</span>
               </div>
-              <div class="bg-white border border-slate-150 rounded-lg p-2">
-                <span class="text-[9px] text-rose-500 block uppercase">Gagal</span>
-                <span class="text-base text-rose-500 font-black block mt-0.5">{{ failedRows }}</span>
+              <div class="bg-white border border-slate-150 rounded-lg p-2 col-span-1 min-w-[70px]">
+                <span class="text-[8px] text-rose-500 block uppercase">Failed</span>
+                <span class="text-xs text-rose-500 font-black block mt-0.5">{{ failedRows }}</span>
               </div>
-            </div>
-          </div>
-
-          <!-- IMPORT COMPLETED SUCCESS SUMMARY CARD -->
-          <div v-if="importStatus === 'completed'" class="space-y-4">
-            <div class="bg-green-50 border border-green-200 rounded-2xl p-4.5 text-center space-y-2 shadow-2xs">
-              <div class="w-10 h-10 rounded-full bg-green-500/10 text-green-600 flex items-center justify-center mx-auto shadow-2xs">
-                <CheckCircle2 class="w-6 h-6 shrink-0" />
-              </div>
-              <div>
-                <h4 class="text-xs font-black text-slate-800 uppercase tracking-wider mt-1">Import Selesai</h4>
-                <p class="text-[10px] text-slate-500 mt-1">Seluruh data kargo telah selesai dipetakan dan disimpan di backend database Laravel.</p>
-              </div>
-            </div>
-
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-4.5 space-y-2 text-2xs font-mono font-bold">
-              <div class="flex justify-between text-slate-500">
-                <span>TOTAL BARIS DATA</span>
-                <span class="text-slate-800 font-black">{{ totalRows }}</span>
-              </div>
-              <div class="flex justify-between text-emerald-600">
-                <span>SUKSES TERIMPORT</span>
-                <span class="text-emerald-700 font-black">✓ {{ successRows }}</span>
-              </div>
-              <div class="flex justify-between text-rose-500">
-                <span>GAGAL / SKIPPED</span>
-                <span class="text-rose-700 font-black">{{ failedRows }}</span>
+              <div class="bg-white border border-slate-150 rounded-lg p-2 col-span-1 min-w-[70px]">
+                <span class="text-[8px] text-amber-600 block uppercase">Duration</span>
+                <span class="text-xs text-amber-600 font-black block mt-0.5">{{ duration }}s</span>
               </div>
             </div>
           </div>
 
-          <!-- ERROR STATE FOOTER -->
-          <div v-if="importStatus === 'failed'" class="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3 text-rose-900 leading-relaxed font-semibold">
-            <AlertTriangle class="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-            <div>
-              <p class="font-bold">Import Gagal</p>
-              <p class="text-2xs text-rose-700 mt-0.5 font-sans">{{ statusMessage }}</p>
+          <!-- ERROR DETAIL TABLE (IF SYSTEM HAS VALIDATION ERRORS OR FAILED ROWS DETECTED) -->
+          <div v-if="batchErrors.length > 0" class="space-y-2 mt-4">
+            <div class="flex items-center justify-between">
+              <p class="font-extrabold text-rose-600 text-[10px] flex items-center gap-1.5 uppercase tracking-wide">
+                <AlertCircle class="w-3.5 h-3.5" />
+                Detail Validasi Error ({{ batchErrors.length }} Baris Skipped)
+              </p>
+              <span class="text-[9px] text-slate-400 font-mono">Excel/CSV Line Logs</span>
+            </div>
+            
+            <div class="border border-slate-200 rounded-lg overflow-hidden max-h-48 overflow-y-auto shadow-3xs">
+              <table class="w-full text-left border-collapse text-[10px]">
+                <thead class="bg-slate-50 text-slate-500 font-mono sticky top-0 border-b border-slate-200">
+                  <tr>
+                    <th class="px-2.5 py-1.5 font-bold w-12 text-center">Row</th>
+                    <th class="px-2.5 py-1.5 font-bold w-32 border-l border-slate-200">No. AWB (resi)</th>
+                    <th class="px-2.5 py-1.5 font-bold border-l border-slate-200">Penyebab Validasi Error</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 font-mono text-slate-705 bg-white">
+                  <tr v-for="(err, idx) in batchErrors" :key="idx" class="hover:bg-slate-50 transition-colors">
+                    <td class="px-2.5 py-1.5 text-center text-slate-500 font-bold border-r border-slate-100">{{ err.row }}</td>
+                    <td class="px-2.5 py-1.5 font-extrabold text-blue-600 border-r border-slate-100 break-all select-all">{{ err.awb }}</td>
+                    <td class="px-2.5 py-1.5 text-rose-600 font-sans leading-relaxed break-words">{{ err.message }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
 
-        <!-- Modal Action controller -->
-        <div class="px-5 py-4 border-t border-slate-100 bg-slate-50/50 flex align-center justify-end gap-2.5">
+        <!-- Modal Action controller (FOOTER BUTTONS) -->
+        <div class="px-5 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-end gap-2.5">
+          <!-- Processing State buttons -->
           <button 
+            v-if="['uploading', 'queued', 'processing'].includes(importStatus || '')"
             type="button" 
-            class="px-4 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer transition select-none disabled:opacity-40"
-            :disabled="importStatus === 'uploading' || importStatus === 'processing' || importStatus === 'queued'"
-            @click="showProgressModal = false"
+            class="px-4.5 py-2 text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 rounded-lg select-none disabled:opacity-75 flex items-center gap-1.5 shrink-0"
+            disabled
           >
-            Tutup
+            <Loader2 class="w-3.5 h-3.5 animate-spin" />
+            Processing...
           </button>
-          
-          <button 
-            v-if="importStatus === 'completed'"
-            type="button" 
-            class="px-4.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition-all rounded-lg cursor-pointer shadow-md select-none"
-            @click="showProgressModal = false; discardDraft();"
-          >
-            View Data
-          </button>
-          
-          <button 
-            v-if="importStatus === 'failed'"
-            type="button" 
-            class="px-4.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all rounded-lg cursor-pointer shadow-md select-none"
-            @click="onStartUpload"
-          >
-            Retry Import
-          </button>
+
+          <!-- Completed State buttons -->
+          <div v-else-if="importStatus === 'completed'" class="flex items-center gap-2">
+            <button 
+              type="button" 
+              class="px-4.5 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer transition select-none flex items-center gap-1.5"
+              @click="showProgressModal = false; discardDraft();"
+            >
+              Close
+            </button>
+            <button 
+              type="button" 
+              class="px-4.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all rounded-lg cursor-pointer shadow-md select-none flex items-center gap-1.5"
+              @click="fetchStdsApi"
+              :disabled="isLoadingData"
+            >
+              <RefreshCw class="w-3.5 h-3.5" :class="{'animate-spin': isLoadingData}" />
+              Refresh Data
+            </button>
+          </div>
+
+          <!-- Failed State buttons -->
+          <div v-else class="flex items-center gap-2">
+            <button 
+              type="button" 
+              class="px-5 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer transition select-none"
+              @click="showProgressModal = false; discardDraft();"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
